@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Albume foto</title>
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f3f5f9;
+            color: #202433;
+        }
+
+        header {
+            padding: 36px 20px;
+            text-align: center;
+            color: white;
+            background: linear-gradient(135deg, #4f46e5, #9333ea);
+        }
+
+        header h1 { margin: 0 0 10px; }
+
+        main {
+            width: min(1000px, 92%);
+            margin: 30px auto;
+        }
+
+        .formular, .album {
+            padding: 22px;
+            margin-bottom: 24px;
+            background: white;
+            border-radius: 14px;
+            box-shadow: 0 5px 18px #18213b12;
+        }
+
+        label {
+            display: block;
+            margin: 14px 0 7px;
+            font-weight: bold;
+        }
+
+        input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccd1dc;
+            border-radius: 8px;
+            font: inherit;
+        }
+
+        button {
+            margin-top: 16px;
+            padding: 12px 18px;
+            border: 0;
+            border-radius: 8px;
+            background: #4f46e5;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:hover { background: #3730a3; }
+        button:disabled { opacity: 0.6; cursor: wait; }
+
+        .mesaj {
+            padding: 12px;
+            border-radius: 8px;
+            background: #eef2ff;
+        }
+
+        .mesaj.eroare { background: #fee2e2; color: #991b1b; }
+
+        .galerie {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .galerie img {
+            display: block;
+            width: 100%;
+            height: 170px;
+            object-fit: cover;
+            border-radius: 10px;
+        }
+
+        .data, .nota { color: #687084; font-size: 14px; }
+        .nota { line-height: 1.5; }
+        [hidden] { display: none; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Generator de albume foto</h1>
+        <p>Adaugă fotografiile tale și organizează-le în albume.</p>
+    </header>
+
+    <main>
+        <section class="formular">
+            <h2>Creează un album</h2>
+            <p id="mesaj" class="mesaj" role="status" hidden></p>
+
+            <form id="formular">
+                <label for="titlu">Numele albumului</label>
+                <input type="text" id="titlu" name="titlu"
+                       placeholder="Exemplu: Vacanța la mare" required>
+
+                <label for="poze">Alege fotografiile</label>
+                <input type="file" id="poze" name="poze"
+                       accept="image/jpeg,image/png,image/gif,image/webp"
+                       aria-describedby="formate" multiple required>
+                <p id="formate" class="nota">JPG, PNG, GIF sau WEBP — maximum 5 MB fiecare.</p>
+
+                <button type="submit" id="butonCreare" disabled>Creează albumul</button>
+            </form>
+
+            <p class="nota">Albumele și fotografiile sunt salvate doar în acest browser,
+                pe acest dispozitiv. Nu sunt publicate pentru ceilalți vizitatori.
+                Ștergerea datelor site-ului le elimină; păstrează fotografiile originale.</p>
+        </section>
+
+        <h2>Albumele mele</h2>
+        <div id="albume" aria-live="polite">
+            <p>Se încarcă albumele…</p>
+        </div>
+    </main>
+
+    <script>
+        'use strict';
+
+        const formular = document.getElementById('formular');
+        const campTitlu = document.getElementById('titlu');
+        const campPoze = document.getElementById('poze');
+        const butonCreare = document.getElementById('butonCreare');
+        const zonaMesaj = document.getElementById('mesaj');
+        const zonaAlbume = document.getElementById('albume');
+        const limitaMarime = 5 * 1024 * 1024;
+
+        let bazaDate;
+        let albume = [];
+        let adreseImagini = [];
+
+        function mesaj(text, eroare = false) {
+            zonaMesaj.textContent = text;
+            zonaMesaj.classList.toggle('eroare', eroare);
+            zonaMesaj.hidden = false;
+        }
+
+        // IndexedDB păstrează fotografiile ca fișiere, fără limita mică din localStorage.
+        function deschideBazaDate() {
+            return new Promise((resolve, reject) => {
+                const cerere = indexedDB.open('GeneratorAlbumeFoto', 1);
+
+                cerere.onupgradeneeded = () => {
+                    cerere.result.createObjectStore('albume', {
+                        keyPath: 'id', autoIncrement: true
+                    });
+                };
+                cerere.onsuccess = () => resolve(cerere.result);
+                cerere.onerror = () => reject(cerere.error);
+            });
+        }
+
+        function citesteAlbume() {
+            return new Promise((resolve, reject) => {
+                const tranzactie = bazaDate.transaction('albume', 'readonly');
+                const cerere = tranzactie.objectStore('albume').getAll();
+                tranzactie.oncomplete = () => resolve(cerere.result);
+                tranzactie.onabort = () => reject(tranzactie.error);
+                tranzactie.onerror = () => reject(tranzactie.error);
+            });
+        }
+
+        function salveazaAlbum(album) {
+            return new Promise((resolve, reject) => {
+                const tranzactie = bazaDate.transaction('albume', 'readwrite');
+                const cerere = tranzactie.objectStore('albume').add(album);
+
+                // Confirmăm salvarea numai după încheierea tranzacției.
+                tranzactie.oncomplete = () => resolve(cerere.result);
+                tranzactie.onabort = () => reject(tranzactie.error);
+                tranzactie.onerror = () => reject(tranzactie.error);
+            });
+        }
+
+        // Verificăm conținutul fișierului, nu doar extensia sa.
+        async function tipImagine(fisier) {
+            const octeti = new Uint8Array(await fisier.slice(0, 12).arrayBuffer());
+            const incepeCu = (valori) => valori.every((v, i) => octeti[i] === v);
+            const text = String.fromCharCode(...octeti);
+
+            if (incepeCu([0xff, 0xd8, 0xff])) return 'image/jpeg';
+            if (incepeCu([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+                return 'image/png';
+            }
+            if (text.startsWith('GIF87a') || text.startsWith('GIF89a')) {
+                return 'image/gif';
+            }
+            if (text.startsWith('RIFF') && text.slice(8, 12) === 'WEBP') {
+                return 'image/webp';
+            }
+            return null;
+        }
+
+        async function pregatesteFotografie(fisier) {
+            if (fisier.size === 0 || fisier.size > limitaMarime) return null;
+
+            const tip = await tipImagine(fisier);
+            if (!tip) return null;
+
+            const imagine = new Blob([fisier], { type: tip });
+            const adresa = URL.createObjectURL(imagine);
+            try {
+                const verificare = new Image();
+                verificare.src = adresa;
+                await verificare.decode();
+                return { nume: fisier.name, fisier: imagine };
+            } catch {
+                return null;
+            } finally {
+                URL.revokeObjectURL(adresa);
+            }
+        }
+
+        function dataCurenta() {
+            const data = new Date();
+            const douaCifre = (valoare) => String(valoare).padStart(2, '0');
+            return `${douaCifre(data.getDate())}.${douaCifre(data.getMonth() + 1)}.` +
+                `${data.getFullYear()} ${douaCifre(data.getHours())}:` +
+                douaCifre(data.getMinutes());
+        }
+
+        function afiseazaAlbume() {
+            adreseImagini.forEach((adresa) => URL.revokeObjectURL(adresa));
+            adreseImagini = [];
+            zonaAlbume.replaceChildren();
+
+            if (albume.length === 0) {
+                const gol = document.createElement('p');
+                gol.textContent = 'Nu ai creat încă niciun album.';
+                zonaAlbume.append(gol);
+                return;
+            }
+
+            for (const album of [...albume].reverse()) {
+                const sectiune = document.createElement('section');
+                sectiune.className = 'album';
+
+                const titlu = document.createElement('h3');
+                titlu.textContent = album.titlu;
+
+                const data = document.createElement('p');
+                data.className = 'data';
+                data.textContent = 'Creat la: ' + album.data;
+
+                const galerie = document.createElement('div');
+                galerie.className = 'galerie';
+
+                for (const fotografie of album.fotografii) {
+                    const imagine = document.createElement('img');
+                    const adresa = URL.createObjectURL(fotografie.fisier);
+                    adreseImagini.push(adresa);
+                    imagine.src = adresa;
+                    imagine.alt = fotografie.nume + ' — ' + album.titlu;
+                    imagine.loading = 'lazy';
+                    galerie.append(imagine);
+                }
+
+                sectiune.append(titlu, data, galerie);
+                zonaAlbume.append(sectiune);
+            }
+        }
+
+        formular.addEventListener('submit', async (eveniment) => {
+            eveniment.preventDefault();
+            if (butonCreare.disabled) return;
+
+            const titlu = campTitlu.value.trim();
+            const fisiere = Array.from(campPoze.files);
+            if (!titlu) {
+                mesaj('Scrie numele albumului.', true);
+                campTitlu.focus();
+                return;
+            }
+            if (fisiere.length === 0) {
+                mesaj('Alege cel puțin o fotografie.', true);
+                return;
+            }
+
+            butonCreare.disabled = true;
+            butonCreare.textContent = 'Se creează…';
+
+            try {
+                const fotografii = [];
+                for (const fisier of fisiere) {
+                    const fotografie = await pregatesteFotografie(fisier);
+                    if (fotografie) fotografii.push(fotografie);
+                }
+
+                if (fotografii.length === 0) {
+                    mesaj('Nu s-au putut încărca fotografiile. Folosește imagini valide ' +
+                        'JPG, PNG, GIF sau WEBP de maximum 5 MB fiecare.', true);
+                    return;
+                }
+
+                const album = { titlu, data: dataCurenta(), fotografii };
+                album.id = await salveazaAlbum(album);
+                albume.push(album);
+                afiseazaAlbume();
+                formular.reset();
+
+                const ignorate = fisiere.length - fotografii.length;
+                mesaj('Albumul a fost creat!' + (ignorate > 0
+                    ? ` Fișiere omise: ${ignorate} (format neacceptat, imagine deteriorată sau peste 5 MB).`
+                    : ''));
+            } catch (eroare) {
+                mesaj(eroare?.name === 'QuotaExceededError'
+                    ? 'Nu mai este suficient spațiu în browser. Albumul nu a fost salvat.'
+                    : 'Albumul nu a putut fi creat. Verifică dacă browserul permite ' +
+                      'salvarea datelor acestui site și încearcă din nou.', true);
+            } finally {
+                butonCreare.disabled = false;
+                butonCreare.textContent = 'Creează albumul';
+            }
+        });
+
+        async function porneste() {
+            try {
+                bazaDate = await deschideBazaDate();
+                bazaDate.onversionchange = () => {
+                    bazaDate.close();
+                    butonCreare.disabled = true;
+                    mesaj('Pagina a fost actualizată într-o altă filă. Reîncarcă pagina.', true);
+                };
+                albume = await citesteAlbume();
+                afiseazaAlbume();
+                butonCreare.disabled = false;
+            } catch {
+                zonaAlbume.textContent = 'Albumele salvate nu pot fi citite.';
+                mesaj('Browserul nu permite salvarea datelor. Deschide pagina într-un ' +
+                    'browser care permite stocarea datelor acestui site.', true);
+            }
+        }
+
+        porneste();
+    </script>
+</body>
+</html>
